@@ -15,6 +15,7 @@ from torchsummary import summary
 from torch.autograd import Variable
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+test = 1
 
 # Defining the Directories
 train_data_dir = "/home/shephali/Desktop/InceptionV2/train"
