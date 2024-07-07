@@ -164,3 +164,4 @@ cython_debug/
 /prediction
 /test
 /train
+*.pth
