@@ -13,13 +13,15 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms, models, datasets
 from torchsummary import summary
 from torch.autograd import Variable
+from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score
+from tqdm import tqdm
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Defining the Directories
-train_data_dir = "/home/shephali/Desktop/InceptionV2/train"
-test_data_dir = "/home/shephali/Desktop/InceptionV2/test"
-pred_data_dir = "/home/shephali/Desktop/InceptionV2/prediction"
+train_data_dir = "/home/shephali/Desktop/inception-v3/train"
+test_data_dir = "/home/shephali/Desktop/inception-v3/test"
+pred_data_dir = "/home/shephali/Desktop/inception-v3/prediction"
 
 # Checking the number of Train Images
 for i in os.listdir(train_data_dir):
@@ -40,8 +42,7 @@ classes = os.listdir(train_data_dir)
 classes = {k: v for k, v in enumerate(sorted(classes))}
 print(classes)
 
-# Performing the Image Transformation and Data Augmentation on the 
-# train dataset and transformation on Validation Dataset
+# Performing the Image Transformation and Data Augmentation on the train dataset and transformation on Validation Dataset
 
 # Convert data to a normalized torch.FloatTensor
 transform = transforms.Compose([
@@ -71,7 +72,7 @@ validation_data = DataLoader(test_data, batch_size=32, drop_last=True, shuffle=T
 model = models.inception_v3(pretrained=True)
 
 # Defining the Model Function.
-# Lets freeze all layers and change just a few layers to match our requirements
+# Let's freeze all layers and change just a few layers to match our requirements
 def get_model():
     model = models.inception_v3(pretrained=True)
     for param in model.parameters():
@@ -82,7 +83,7 @@ def get_model():
         nn.Linear(2048, 128),
         nn.ReLU(),
         nn.Dropout(0.2),
-        nn.Linear(128, 6)
+        nn.Linear(128, len(classes))
     )
     model.aux_logits = False
     loss_fn = nn.CrossEntropyLoss()
@@ -98,8 +99,8 @@ def train_batch(x, y, model, opt, loss_fn):
     output = model(x)
     batch_loss = loss_fn(output, y)
     batch_loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
+    opt.step()
+    opt.zero_grad()
     return batch_loss.item()
 
 @torch.no_grad()
@@ -117,43 +118,93 @@ def val_loss(x, y, model):
     val_loss = loss_fn(prediction, y)
     return val_loss.item()
 
+# Early stopping and model saving
+best_val_loss = float('inf')
+best_model_wts = None
+patience = 10
+trigger_times = 0
+
 # Initializing the Model, Loss Function, and Optimizer to a Variable
 model, loss_fn, optimizer = get_model()
 
 # Start the Model Training and save the Losses and Accuracies of Both train and validation
 train_losses, train_accuracies = [], []
 val_losses, val_accuracies = [], []
-for epoch in range(10):
-    print(epoch)
+
+epochs = 100
+
+for epoch in range(epochs):
+    print(f'Epoch {epoch}/{epochs-1}')
+    print('-' * 10)
+
     train_epoch_losses, train_epoch_accuracies = [], []
-    for ix, batch in enumerate(training_data):
+    val_epoch_losses, val_epoch_accuracies = [], []
+
+    # Training phase
+    model.train()
+    for batch in tqdm(training_data, desc="Training"):
         x, y = batch
         x, y = x.to(device), y.to(device)
         batch_loss = train_batch(x, y, model, optimizer, loss_fn)
+        train_epoch_losses.append(batch_loss)
         is_correct = accuracy(x, y, model)
         train_epoch_accuracies.extend(is_correct)
-        train_epoch_losses.append(batch_loss)        
-    train_epoch_loss = np.array(train_epoch_losses).mean()
-    train_epoch_accuracy = np.mean(train_epoch_accuracies)        
-    print('Epoch:', epoch, 'Train Loss:', train_epoch_loss, 'Train Accuracy:', train_epoch_accuracy)
 
-    val_epoch_losses, val_epoch_accuracies = [], []
-    for ix, batch in enumerate(validation_data):
+    # Validation phase
+    model.eval()
+    for batch in tqdm(validation_data, desc="Validation"):
         x, y = batch
         x, y = x.to(device), y.to(device)
-        val_is_correct = accuracy(x, y, model)
         validation_loss = val_loss(x, y, model)
-        val_epoch_accuracies.extend(val_is_correct)
         val_epoch_losses.append(validation_loss)
-    val_epoch_loss = np.array(val_epoch_losses).mean()
+        is_correct = accuracy(x, y, model)
+        val_epoch_accuracies.extend(is_correct)
+
+    train_epoch_loss = np.mean(train_epoch_losses)
+    train_epoch_accuracy = np.mean(train_epoch_accuracies)
+    val_epoch_loss = np.mean(val_epoch_losses)
     val_epoch_accuracy = np.mean(val_epoch_accuracies)
-    
-    print('Epoch:', epoch, 'Validation Loss:', val_epoch_loss, 'Validation Accuracy:', val_epoch_accuracy)
 
     train_losses.append(train_epoch_loss)
     train_accuracies.append(train_epoch_accuracy)
     val_losses.append(val_epoch_loss)
     val_accuracies.append(val_epoch_accuracy)
+
+    print(f'Train Loss: {train_epoch_loss:.4f} Train Accuracy: {train_epoch_accuracy:.4f}')
+    print(f'Validation Loss: {val_epoch_loss:.4f} Validation Accuracy: {val_epoch_accuracy:.4f}')
+
+    if val_epoch_loss < best_val_loss:
+        best_val_loss = val_epoch_loss
+        best_model_wts = model.state_dict()
+        trigger_times = 0
+    else:
+        trigger_times += 1
+
+    if trigger_times >= patience:
+        print('Early stopping!')
+        break
+
+# Load the best model weights
+if best_model_wts is not None:
+    model.load_state_dict(best_model_wts)
+
+# Plotting the training and validation loss and accuracy
+epochs_range = range(len(train_losses))
+plt.figure(figsize=(12, 6))
+
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, train_losses, label='Train Loss')
+plt.plot(epochs_range, val_losses, label='Validation Loss')
+plt.legend(loc='upper right')
+plt.title('Training and Validation Loss')
+
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, train_accuracies, label='Train Accuracy')
+plt.plot(epochs_range, val_accuracies, label='Validation Accuracy')
+plt.legend(loc='lower right')
+plt.title('Training and Validation Accuracy')
+
+plt.show()
 
 # Define the function to predict the images from the prediction set
 def pred_class(img):
@@ -165,20 +216,43 @@ def pred_class(img):
     return index
 
 # Get the location of all the prediction files
-pred_files = [os.path.join(pred_data_dir, f) for f in os.listdir(pred_data_dir)]
+pred_files = []
+for root, dirs, files in os.walk(pred_data_dir):
+    for file in files:
+        if file.endswith('.jpg') or file.endswith('.png'):
+            pred_files.append(os.path.join(root, file))
+
 print(pred_files[:10])
 
-# Prediction Results
-model.eval()
+# Prediction of the class for the images in prediction folder
 
-plt.figure(figsize=(20, 20))
-for i, image_path in enumerate(pred_files):
-    if i > 24:
-        break
-    img = Image.open(image_path)
-    index = pred_class(img)
-    plt.subplot(5, 5, i + 1)
-    plt.title(classes[index])
-    plt.axis('off')
-    plt.imshow(img)
-plt.show()
+
+output = [pred_class(Image.open(f)) for f in pred_files]
+
+# Add more detailed evaluation metrics
+y_true = []
+y_pred = []
+
+model.eval()
+for batch in tqdm(validation_data, desc="Evaluation"):
+    x, y = batch
+    x, y = x.to(device), y.to(device)
+    with torch.no_grad():
+        outputs = model(x)
+        _, preds = torch.max(outputs, 1)
+    y_true.extend(y.cpu().numpy())
+    y_pred.extend(preds.cpu().numpy())
+
+conf_matrix = confusion_matrix(y_true, y_pred)
+print("Confusion Matrix:\n", conf_matrix)
+
+report = classification_report(y_true, y_pred, target_names=classes.values())
+print("Classification Report:\n", report)
+
+f1 = f1_score(y_true, y_pred, average='weighted')
+precision = precision_score(y_true, y_pred, average='weighted')
+recall = recall_score(y_true, y_pred, average='weighted')
+
+print(f'F1 Score: {f1:.4f}')
+print(f'Precision: {precision:.4f}')
+print(f'Recall: {recall:.4f}')
