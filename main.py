@@ -17,6 +17,7 @@ from sklearn.metrics import confusion_matrix, classification_report, f1_score, p
 from tqdm import tqdm
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+test = 1
 
 # Defining the Directories
 train_data_dir = "/home/shephali/Desktop/inception-v3/train"
